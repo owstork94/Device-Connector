@@ -1,5 +1,7 @@
 package httpconnector;
 
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLHandshakeException;
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -94,7 +96,7 @@ public class HttpConnector_v3 extends JFrame {
         setVisible(true);
     }
 
-    // 네트워크 스캔
+    //네트워크 스캔해서 카메라 여부 확인 후 출력
     private void scanNetwork() {
         tableModel.setRowCount(0); // 초기화
         String baseIP = ipField.getText().trim();
@@ -106,21 +108,111 @@ public class HttpConnector_v3 extends JFrame {
         for (int i = 1; i <= 254; i++) {
             final String ip = baseIP + ".0." + i;
             executor.execute(() -> {
-                boolean reachable = isReachable(ip);
-                SwingUtilities.invokeLater(() -> {
-                    tableModel.addRow(new Object[]{
-                            ip,
-                            reachable ? "접속 가능" : "불가",
-                            "접속"
+                boolean isCamera = isCamera(ip);
+                if (isCamera) {
+                    SwingUtilities.invokeLater(() -> {
+                        tableModel.addRow(new Object[]{
+                                ip,
+                                "연결된 카메라",
+                                "접속"
+                        });
                     });
-                });
+                }
+                // 카메라가 아닌 경우는 출력하지 않음
             });
         }
 
         executor.shutdown();
     }
 
-    // 핑 체크
+
+    // 네트워크 스캔
+//    private void scanNetwork() {
+//        tableModel.setRowCount(0); // 초기화
+//        String baseIP = ipField.getText().trim();
+//        String portText = portField.getText().trim();
+//        int port = portText.isEmpty() ? 443 : Integer.parseInt(portText);
+//
+//        ExecutorService executor = Executors.newFixedThreadPool(50);
+//
+//        for (int i = 1; i <= 254; i++) {
+//            final String ip = baseIP + ".0." + i;
+////            executor.execute(() -> {
+////                boolean reachable = isReachable(ip);
+////                SwingUtilities.invokeLater(() -> {
+////                    tableModel.addRow(new Object[]{
+////                            ip,
+////                            reachable ? "접속 가능" : "불가",
+////                            "접속"
+////                    });
+////                });
+////            });
+//            executor.execute(() -> {
+//                String reachable = checkIPStatus(ip);
+//                SwingUtilities.invokeLater(() -> {
+//                    tableModel.addRow(new Object[]{
+//                            ip,
+//                            reachable,
+//                            "접속"
+//                    });
+//                });
+//            });
+//        }
+//
+//        executor.shutdown();
+//    }
+
+    //핑 체크성공, https 실패면 카메라로 간주
+    private boolean isCamera(String ip) {
+        try {
+            InetAddress address = InetAddress.getByName(ip);
+            if (!address.isReachable(500)) {
+                return false; // 핑 실패면 기타 단말
+            }
+
+            // 핑 성공했으면 HTTPS 연결 테스트
+            URL url = new URL("https://" + ip);
+            HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+            conn.setConnectTimeout(1000);
+            conn.connect();
+            conn.disconnect();
+
+            return false; // HTTPS 정상 연결 = 카메라 아님
+
+        } catch (SSLHandshakeException sslEx) {
+            return true; // SSL 인증서 오류 발생 -> 카메라다!
+        } catch (Exception e) {
+            return false; // 그 외 에러 → 카메라 아님
+        }
+    }
+
+
+    //1.PING 가면 접속 가능 -> 2. PING 통과하면 HTTPS 요청 해서 인증서 에러나면 카메라로 간주
+    private String checkIPStatus(String ip) {
+        try {
+            InetAddress address = InetAddress.getByName(ip);
+            if (!address.isReachable(500)) {
+                return "X"; // 핑 실패
+            }
+
+            // 핑 성공했으면 HTTPS 연결 테스트
+            URL url = new URL("https://" + ip);
+            HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
+            conn.setConnectTimeout(1000);
+            conn.connect();
+
+            conn.disconnect();
+            return "접속 가능"; // HTTPS 연결 성공
+
+        } catch (SSLHandshakeException sslEx) {
+            return "연결된 카메라"; // SSL 인증서 문제 = 카메라라고 표시
+        } catch (Exception e) {
+            return "기타 단말"; // 그 외 에러는 그냥 불가
+        }
+    }
+
+
+    // 핑 체크 만 하는 메서드
     private boolean isReachable(String ip) {
         try {
             InetAddress address = InetAddress.getByName(ip);
@@ -153,7 +245,13 @@ public class HttpConnector_v3 extends JFrame {
             JLabel label = new JLabel(value.toString(), SwingConstants.CENTER);
             if ("접속 가능".equals(value.toString())) {
                 label.setForeground(new Color(0, 153, 0)); // 녹색
-            } else {
+            }
+            else if("연결된 카메라".equals(value.toString()))
+            {
+                label.setForeground(new Color(0, 153, 0)); // 녹색
+            }
+
+            else {
                 label.setForeground(Color.RED); // 빨강색
             }
             return label;
