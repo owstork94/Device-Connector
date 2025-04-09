@@ -8,6 +8,8 @@ import javax.swing.event.DocumentListener;
 import javax.swing.table.*;
 import java.awt.*;
 import java.net.*;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.*;
 
 public class HttpConnector_v3 extends JFrame {
@@ -16,6 +18,22 @@ public class HttpConnector_v3 extends JFrame {
     private JTable table;
     private DefaultTableModel tableModel;
     private TableRowSorter<DefaultTableModel> rowSorter;
+
+    private Map<String, String> ipToMacMap = new HashMap<>() {{
+        put("192.168.0.7", " 4A-06");
+        put("192.168.0.9", " 03-02");
+        put("192.168.0.11", " A7-E0");
+        put("192.168.0.12", " A7-D6");
+        put("192.168.0.15", " 92-B1");
+        put("192.168.0.17", " 30-2A");
+        put("192.168.0.18", " AB-FF");
+        put("192.168.0.19", " 12-4C");
+        put("192.168.0.20", " 4A-86");
+        put("192.168.0.21", " 36-37");
+        put("192.168.0.22", " 4A-7F");
+        put("192.168.0.23", " 4A-27");
+    }};
+
 
     public HttpConnector_v3() {
         setTitle("IP 대역 HTTPS 접속기");
@@ -107,12 +125,27 @@ public class HttpConnector_v3 extends JFrame {
 
         for (int i = 1; i <= 254; i++) {
             final String ip = baseIP + ".0." + i;
+
+//            String displayIp = ip;
+//            if (ipToMacMap.containsKey(ip)) {
+//                displayIp += " (" + ipToMacMap.get(ip) + ")";
+//            }
+//            tableModel.addRow(new Object[]{
+//                    displayIp,
+//                    "카메라",
+//                    "접속"
+//            });
+
             executor.execute(() -> {
                 boolean isCamera = isCamera(ip);
                 if (isCamera) {
                     SwingUtilities.invokeLater(() -> {
+                        String displayIp = ip;
+                        if (ipToMacMap.containsKey(ip)) {
+                            displayIp += "  (" + ipToMacMap.get(ip) + ")";
+                        }
                         tableModel.addRow(new Object[]{
-                                ip,
+                                displayIp,
                                 "연결된 카메라",
                                 "접속"
                         });
