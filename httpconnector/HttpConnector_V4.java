@@ -12,90 +12,79 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
 
-public class HttpConnector_v3 extends JFrame {
+public class HttpConnector_V4 extends JFrame {
     private JTextField ipField, portField, searchField;
     private JButton scanButton;
     private JTable table;
     private DefaultTableModel tableModel;
     private TableRowSorter<DefaultTableModel> rowSorter;
 
+    // IP → MAC 매핑
     private Map<String, String> ipToMacMap = new HashMap<String, String>() {{
-        put("192.168.0.7", " 4A-06");
-        put("192.168.0.9", " 03-02");
-        put("192.168.0.11", " A7-E0");
-        put("192.168.0.12", " A7-D6");
-        put("192.168.0.15", " 92-B1");
-        put("192.168.0.17", " 30-2A");
-        put("192.168.0.18", " AB-FF");
-        put("192.168.0.19", " 12-4C");
-        put("192.168.0.20", " 4A-86");
-        put("192.168.0.21", " 36-37");
-        put("192.168.0.22", " 4A-7F");
-        put("192.168.0.23", " 4A-27");
+        put("192.168.0.7", "6C-1C-71-0C-4A-06");
+        put("192.168.0.9", "14-A7-8B-A9-03-02");
+        put("192.168.0.11", "00-18-9A-27-A7-E0");
+        put("192.168.0.12", "00-18-9A-27-A7-D6");
+        put("192.168.0.15", "00-25-C2-86-92-B1");
+        put("192.168.0.17", "A0-BD-1D-F2-30-2A");
+        put("192.168.0.18", "6C-1C-71-0A-AB-FF");
+        put("192.168.0.19", "B4-4C-3B-FA-12-4C");
+        put("192.168.0.20", "6C-1C-71-0C-4A-86");
+        put("192.168.0.21", "A0-BD-1D-F2-36-37");
+        put("192.168.0.22", "6C-1C-71-0C-4A-7F");
+        put("192.168.0.23", "6C-1C-71-0C-4A-27");
     }};
 
-
-    public HttpConnector_v3() {
+    public HttpConnector_V4() {
         setTitle("IP 대역 HTTPS 접속기");
-        setSize(500, 300);
+        setSize(500, 300); // 창 크기 설정
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
 
-        // 상단 입력 패널
+        // 입력 패널 (IP 대역 + 포트)
         JPanel inputPanel = new JPanel();
         inputPanel.add(new JLabel("IP 대역:"));
         ipField = new JTextField("192.168", 10);
         inputPanel.add(ipField);
-        scanButton = new JButton("검색");
-        inputPanel.add(scanButton);
+
         inputPanel.add(new JLabel("포트 (옵션):"));
         portField = new JTextField(5);
         inputPanel.add(portField);
 
-
-
-
+        scanButton = new JButton("검색");
+        inputPanel.add(scanButton);
         add(inputPanel, BorderLayout.NORTH);
 
-
-
-        // 테이블 모델
+        // 테이블 생성
         tableModel = new DefaultTableModel(new Object[]{"IP 주소", "상태", "접속"}, 0) {
             public boolean isCellEditable(int row, int column) {
                 return column == 2; // 접속 버튼만 클릭 가능
             }
         };
-
-        // 테이블 + 스크롤
         table = new JTable(tableModel);
         table.getColumn("상태").setCellRenderer(new StatusRenderer());
         table.getColumn("접속").setCellRenderer(new ButtonRenderer());
         table.getColumn("접속").setCellEditor(new ButtonEditor(new JCheckBox()));
 
         JScrollPane scrollPane = new JScrollPane(table);
-        add(scrollPane, BorderLayout.CENTER);
 
-        // 검색 패널
+        // 검색창 + 테이블 묶기
         JPanel searchPanel = new JPanel(new BorderLayout());
         searchPanel.add(new JLabel("검색:"), BorderLayout.WEST);
-
         searchField = new JTextField();
         searchPanel.add(searchField, BorderLayout.CENTER);
 
-        add(searchPanel, BorderLayout.SOUTH);
+        JPanel centerPanel = new JPanel(new BorderLayout());
+        centerPanel.add(searchPanel, BorderLayout.NORTH);
+        centerPanel.add(scrollPane, BorderLayout.CENTER);
+        add(centerPanel, BorderLayout.CENTER);
 
-        // 검색 기능 + 정렬 기능
+        // 검색 기능
         rowSorter = new TableRowSorter<>(tableModel);
-
-
-        rowSorter.setComparator(0, (ip1, ip2) -> {
-            return ipToLong(ip1.toString()).compareTo(ipToLong(ip2.toString()));
-        });
-
+        rowSorter.setComparator(0, (ip1, ip2) -> ipToLong(ip1.toString()).compareTo(ipToLong(ip2.toString())));
         table.setRowSorter(rowSorter);
 
-        // 검색창 입력시 필터링
         searchField.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e) { filter(); }
             public void removeUpdate(DocumentEvent e) { filter(); }
@@ -111,155 +100,65 @@ public class HttpConnector_v3 extends JFrame {
             }
         });
 
-        // 검색 버튼 클릭 이벤트
+        // 검색 버튼 누를 때
         scanButton.addActionListener(e -> scanNetwork());
 
         setVisible(true);
+
+        // 시작하자마자 자동 검색
         scanNetwork();
     }
 
-    //네트워크 스캔해서 카메라 여부 확인 후 출력
+    // 네트워크 스캔
     private void scanNetwork() {
         tableModel.setRowCount(0); // 초기화
         String baseIP = ipField.getText().trim();
-        String portText = portField.getText().trim();
-        int port = portText.isEmpty() ? 443 : Integer.parseInt(portText);
 
         ExecutorService executor = Executors.newFixedThreadPool(50);
 
         for (int i = 1; i <= 254; i++) {
             final String ip = baseIP + ".0." + i;
-
-//            String displayIp = ip;
-//            if (ipToMacMap.containsKey(ip)) {
-//                displayIp += " (" + ipToMacMap.get(ip) + ")";
-//            }
-//            tableModel.addRow(new Object[]{
-//                    displayIp,
-//                    "카메라",
-//                    "접속"
-//            });
-
             executor.execute(() -> {
                 boolean isCamera = isCamera(ip);
                 if (isCamera) {
                     SwingUtilities.invokeLater(() -> {
                         String displayIp = ip;
                         if (ipToMacMap.containsKey(ip)) {
-                            displayIp += "  (" + ipToMacMap.get(ip) + ")";
+                            displayIp += " (" + ipToMacMap.get(ip) + ")";
                         }
                         tableModel.addRow(new Object[]{
                                 displayIp,
-                                "연결된 카메라",
+                                "카메라",
                                 "접속"
                         });
                     });
                 }
-                // 카메라가 아닌 경우는 출력하지 않음
             });
         }
-
         executor.shutdown();
     }
 
-
-    // 네트워크 스캔
-//    private void scanNetwork() {
-//        tableModel.setRowCount(0); // 초기화
-//        String baseIP = ipField.getText().trim();
-//        String portText = portField.getText().trim();
-//        int port = portText.isEmpty() ? 443 : Integer.parseInt(portText);
-//
-//        ExecutorService executor = Executors.newFixedThreadPool(50);
-//
-//        for (int i = 1; i <= 254; i++) {
-//            final String ip = baseIP + ".0." + i;
-////            executor.execute(() -> {
-////                boolean reachable = isReachable(ip);
-////                SwingUtilities.invokeLater(() -> {
-////                    tableModel.addRow(new Object[]{
-////                            ip,
-////                            reachable ? "접속 가능" : "불가",
-////                            "접속"
-////                    });
-////                });
-////            });
-//            executor.execute(() -> {
-//                String reachable = checkIPStatus(ip);
-//                SwingUtilities.invokeLater(() -> {
-//                    tableModel.addRow(new Object[]{
-//                            ip,
-//                            reachable,
-//                            "접속"
-//                    });
-//                });
-//            });
-//        }
-//
-//        executor.shutdown();
-//    }
-
-    //핑 체크성공, https 실패면 카메라로 간주
+    // 핑 + HTTPS SSL 오류 체크
     private boolean isCamera(String ip) {
         try {
             InetAddress address = InetAddress.getByName(ip);
             if (!address.isReachable(500)) {
-                return false; // 핑 실패면 기타 단말
+                return false; // 핑 실패
             }
-
-            // 핑 성공했으면 HTTPS 연결 테스트
             URL url = new URL("https://" + ip);
             HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
             conn.setConnectTimeout(1000);
             conn.connect();
             conn.disconnect();
-
-            return false; // HTTPS 정상 연결 = 카메라 아님
-
+            return false; // HTTPS 정상 연결
         } catch (SSLHandshakeException sslEx) {
-            return true; // SSL 인증서 오류 발생 -> 카메라다!
-        } catch (Exception e) {
-            return false; // 그 외 에러 → 카메라 아님
-        }
-    }
-
-
-    //1.PING 가면 접속 가능 -> 2. PING 통과하면 HTTPS 요청 해서 인증서 에러나면 카메라로 간주
-    private String checkIPStatus(String ip) {
-        try {
-            InetAddress address = InetAddress.getByName(ip);
-            if (!address.isReachable(500)) {
-                return "X"; // 핑 실패
-            }
-
-            // 핑 성공했으면 HTTPS 연결 테스트
-            URL url = new URL("https://" + ip);
-            HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
-            conn.setConnectTimeout(1000);
-            conn.connect();
-
-            conn.disconnect();
-            return "접속 가능"; // HTTPS 연결 성공
-
-        } catch (SSLHandshakeException sslEx) {
-            return "연결된 카메라"; // SSL 인증서 문제 = 카메라라고 표시
-        } catch (Exception e) {
-            return "기타 단말"; // 그 외 에러는 그냥 불가
-        }
-    }
-
-
-    // 핑 체크 만 하는 메서드
-    private boolean isReachable(String ip) {
-        try {
-            InetAddress address = InetAddress.getByName(ip);
-            return address.isReachable(500); // 타임아웃 500ms
+            return true; // SSL 인증서 문제 -> 카메라
         } catch (Exception e) {
             return false;
         }
     }
 
-    // IP를 숫자로 변환
+    // IP를 숫자로 변환 (정렬용)
     private Long ipToLong(String ipAddress) {
         try {
             String[] parts = ipAddress.split("\\.");
@@ -274,22 +173,14 @@ public class HttpConnector_v3 extends JFrame {
         }
     }
 
-    // 상태 표시 렌더러
+    // 상태 컬러 렌더링
     class StatusRenderer extends DefaultTableCellRenderer {
         public Component getTableCellRendererComponent(JTable table, Object value,
                                                        boolean isSelected, boolean hasFocus,
                                                        int row, int column) {
             JLabel label = new JLabel(value.toString(), SwingConstants.CENTER);
-            if ("접속 가능".equals(value.toString())) {
+            if ("카메라".equals(value.toString())) {
                 label.setForeground(new Color(0, 153, 0)); // 녹색
-            }
-            else if("연결된 카메라".equals(value.toString()))
-            {
-                label.setForeground(new Color(0, 153, 0)); // 녹색
-            }
-
-            else {
-                label.setForeground(Color.RED); // 빨강색
             }
             return label;
         }
@@ -300,7 +191,6 @@ public class HttpConnector_v3 extends JFrame {
         public ButtonRenderer() {
             setText("접속");
         }
-
         public Component getTableCellRendererComponent(JTable table, Object value,
                                                        boolean isSelected, boolean hasFocus,
                                                        int row, int column) {
@@ -308,7 +198,7 @@ public class HttpConnector_v3 extends JFrame {
         }
     }
 
-    // 접속 버튼 에디터 (클릭 이벤트)
+    // 접속 버튼 핸들러
     class ButtonEditor extends DefaultCellEditor {
         private JButton button = new JButton("접속");
         private String ip;
@@ -322,6 +212,9 @@ public class HttpConnector_v3 extends JFrame {
         public Component getTableCellEditorComponent(JTable table, Object value,
                                                      boolean isSelected, int row, int column) {
             ip = table.getValueAt(row, 0).toString();
+            if (ip.contains("(")) {
+                ip = ip.substring(0, ip.indexOf("(")).trim();
+            }
             isPushed = true;
             return button;
         }
@@ -343,6 +236,6 @@ public class HttpConnector_v3 extends JFrame {
     }
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(HttpConnector_v3::new);
+        SwingUtilities.invokeLater(HttpConnector_V4::new);
     }
 }
