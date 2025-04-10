@@ -37,7 +37,7 @@ public class HttpConnector_v3 extends JFrame {
 
     public HttpConnector_v3() {
         setTitle("IP 대역 HTTPS 접속기");
-        setSize(700, 500);
+        setSize(500, 300);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
@@ -47,15 +47,18 @@ public class HttpConnector_v3 extends JFrame {
         inputPanel.add(new JLabel("IP 대역:"));
         ipField = new JTextField("192.168", 10);
         inputPanel.add(ipField);
-
+        scanButton = new JButton("검색");
+        inputPanel.add(scanButton);
         inputPanel.add(new JLabel("포트 (옵션):"));
         portField = new JTextField(5);
         inputPanel.add(portField);
 
-        scanButton = new JButton("검색");
-        inputPanel.add(scanButton);
+
+
 
         add(inputPanel, BorderLayout.NORTH);
+
+
 
         // 테이블 모델
         tableModel = new DefaultTableModel(new Object[]{"IP 주소", "상태", "접속"}, 0) {
@@ -112,6 +115,7 @@ public class HttpConnector_v3 extends JFrame {
         scanButton.addActionListener(e -> scanNetwork());
 
         setVisible(true);
+        scanNetwork();
     }
 
     //네트워크 스캔해서 카메라 여부 확인 후 출력
