@@ -3,12 +3,13 @@ package httpconnector;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLHandshakeException;
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.*;
 import java.awt.*;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.*;
 import java.net.*;
 import java.util.List;
 import java.util.*;
@@ -18,13 +19,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 리팩토링 포인트
- * - EDT 블로킹 제거: SwingWorker로 백그라운드 스캔 + publish/process 로 안전한 UI 업데이트
- * - 구조화: ScanResult/Model/Renderer/Editor 분리, 상수/유틸 정리
- * - 입력 유연화: "192.168.0", "192.168.0.*", "192.168.0.10-100", "192.168.0.0/24", "192.168.0.15" 지원
- * - 정렬 안정화: 실제 IP(Long) 기준 정렬
- * - 취소/진행률: 검색 버튼 토글(검색↔중지), ProgressBar 추가
- * - 네트워크 체크 개선: 빠른 TCP 포트 열림 체크 → HTTPS 연결 시도 → SSLHandshakeException 이면 "카메라"로 판별
+ * UI/UX 업그레이드 포인트
+ * - 상단 툴바 스타일: 정렬/여백/아이콘/키보드 단축키(Enter=검색, Esc=중지, Ctrl+F=검색창 포커스)
+ * - 검색창 플레이스홀더, 즉시 필터
+ * - 테이블: 고정 높이, 헤더 굵게, 지브라(줄무늬) 배경, 상태 pill(라운드 배경), IP monospace, 열 너비/정렬 최적화
+ * - 하단 상태바: 총 대상/검출 수, 진행률 표시
+ * - 컨테이너 여백과 컬러 톤(라이트/다크 모두 무난)
+ * - 코드/로직은 기존과 동일하게 유지, 시각 요소만 개선
  */
 public class HttpConnector_V4 extends JFrame {
     // ===== Constants =====
@@ -40,6 +41,7 @@ public class HttpConnector_V4 extends JFrame {
     private ScanTableModel tableModel;
     private TableRowSorter<ScanTableModel> rowSorter;
     private JProgressBar progressBar;
+    private JLabel statusLabel;
 
     // ===== State =====
     private volatile ScanWorker currentWorker;
@@ -59,43 +61,52 @@ public class HttpConnector_V4 extends JFrame {
         put("192.168.0.22", "6C-1C-71-0C-4A-7F");
         put("192.168.0.23", "6C-1C-71-0C-4A-27");
         put("192.168.0.148", "14-A7-8B-A8-E1-47");
+        put("192.168.0.8", "A0-BD-1D-F2-30-22");
+        //
     }};
 
     public HttpConnector_V4() {
-        setTitle("IP 대역 HTTPS 접속기 (리팩토링)");
-        setSize(700, 500);
+        applyModernUI();
+        setTitle("IP 대역 HTTPS 접속기");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setMinimumSize(new Dimension(820, 560));
         setLocationRelativeTo(null);
-        setLayout(new BorderLayout(8, 8));
+        setLayout(new BorderLayout());
 
-        // ===== Top: 입력 =====
-        JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
-        inputPanel.add(new JLabel("IP 대역:"));
-        ipField = new JTextField("192.168.0", 14);
-        inputPanel.add(ipField);
-
-        inputPanel.add(new JLabel("포트(옵션):"));
-        portField = new JTextField(5);
-        inputPanel.add(portField);
-
-        scanButton = new JButton("검색");
-        inputPanel.add(scanButton);
-
-        progressBar = new JProgressBar();
-        progressBar.setStringPainted(true);
-        progressBar.setVisible(false);
-        progressBar.setPreferredSize(new Dimension(180, 18));
-        inputPanel.add(progressBar);
-
-        add(inputPanel, BorderLayout.NORTH);
+        // ===== Top: 툴바(입력) =====
+        JToolBar toolbar = buildToolbar();
+        add(toolbar, BorderLayout.NORTH);
 
         // ===== Center: 검색 + 테이블 =====
         tableModel = new ScanTableModel();
-        table = new JTable(tableModel);
-        table.setRowHeight(24);
+        table = new JTable(tableModel) {
+            // 줄무늬 배경
+            @Override public Component prepareRenderer(TableCellRenderer r, int row, int col) {
+                Component c = super.prepareRenderer(r, row, col);
+                if (!isRowSelected(row)) {
+                    Color base = getBackground();
+                    Color zebra = new Color(base.getRed(), base.getGreen(), base.getBlue(), 10);
+                    c.setBackground((row % 2 == 0) ? base : zebra);
+                }
+                return c;
+            }
+        };
+        table.setRowHeight(26);
+        table.setFillsViewportHeight(true);
+        table.setShowHorizontalLines(false);
+        table.setShowVerticalLines(false);
+        table.setIntercellSpacing(new Dimension(0, 0));
+        table.setAutoCreateRowSorter(false);
+
+        // 헤더 스타일
+        JTableHeader header = table.getTableHeader();
+        header.setReorderingAllowed(false);
+        header.setPreferredSize(new Dimension(header.getPreferredSize().width, 32));
+        header.setFont(header.getFont().deriveFont(Font.BOLD));
 
         // 렌더러/에디터
-        table.getColumnModel().getColumn(1).setCellRenderer(new StatusRenderer());
+        table.getColumnModel().getColumn(0).setCellRenderer(new IpRenderer());
+        table.getColumnModel().getColumn(1).setCellRenderer(new StatusPillRenderer());
         table.getColumnModel().getColumn(2).setCellRenderer(new ButtonRenderer());
         table.getColumnModel().getColumn(2).setCellEditor(new ButtonEditor(new JCheckBox()));
 
@@ -104,17 +115,39 @@ public class HttpConnector_V4 extends JFrame {
         rowSorter.setComparator(0, Comparator.comparingLong(Util::ipToLong));
         table.setRowSorter(rowSorter);
 
-        JScrollPane scrollPane = new JScrollPane(table);
+        // 열 너비
+        TableColumnModel cols = table.getColumnModel();
+        cols.getColumn(0).setPreferredWidth(340);
+        cols.getColumn(1).setPreferredWidth(120);
+        cols.getColumn(2).setPreferredWidth(80);
 
-        JPanel searchPanel = new JPanel(new BorderLayout(6, 6));
-        searchPanel.add(new JLabel("검색:"), BorderLayout.WEST);
+        JScrollPane scrollPane = new JScrollPane(table);
+        scrollPane.setBorder(new EmptyBorder(0, 12, 12, 12));
+
+        // 상단 검색바
+        JPanel searchPanel = new JPanel(new BorderLayout(8, 8));
+        searchPanel.setBorder(new EmptyBorder(8, 12, 8, 12));
+        JLabel searchLabel = new JLabel("검색");
         searchField = new JTextField();
+        installPlaceholder(searchField, "IP/MAC/상태 필터…  (Ctrl+F)");
+        searchPanel.add(searchLabel, BorderLayout.WEST);
         searchPanel.add(searchField, BorderLayout.CENTER);
 
-        JPanel centerPanel = new JPanel(new BorderLayout(6, 6));
+        JPanel centerPanel = new JPanel(new BorderLayout());
         centerPanel.add(searchPanel, BorderLayout.NORTH);
         centerPanel.add(scrollPane, BorderLayout.CENTER);
         add(centerPanel, BorderLayout.CENTER);
+
+        // 하단 상태바
+        JPanel statusBar = new JPanel(new BorderLayout());
+        statusBar.setBorder(new EmptyBorder(6, 12, 8, 12));
+        statusLabel = new JLabel("대기 중");
+        progressBar = new JProgressBar();
+        progressBar.setStringPainted(true);
+        progressBar.setVisible(false);
+        statusBar.add(statusLabel, BorderLayout.WEST);
+        statusBar.add(progressBar, BorderLayout.EAST);
+        add(statusBar, BorderLayout.SOUTH);
 
         // 검색 필터 동작
         searchField.getDocument().addDocumentListener(new DocumentListener() {
@@ -129,19 +162,35 @@ public class HttpConnector_V4 extends JFrame {
                     String regex = Pattern.quote(text.trim());
                     rowSorter.setRowFilter(RowFilter.regexFilter("(?i)" + regex));
                 }
+                updateStatus();
             }
         });
 
         // 버튼 핸들러
         scanButton.addActionListener(e -> onScanButton());
 
+        // 단축키
+        InputMap im = centerPanel.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+        ActionMap am = centerPanel.getActionMap();
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "scan");
+        am.put("scan", new AbstractAction() { public void actionPerformed(ActionEvent e) { onScanButton(); }});
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancel");
+        am.put("cancel", new AbstractAction() { public void actionPerformed(ActionEvent e) { cancelScanIfRunning(); }});
+        im.put(KeyStroke.getKeyStroke(KeyEvent.VK_F, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()), "focusSearch");
+        am.put("focusSearch", new AbstractAction() { public void actionPerformed(ActionEvent e) { searchField.requestFocusInWindow(); }});
+
+        // 우클릭 메뉴(복사/열기)
+        JPopupMenu popup = new JPopupMenu();
+        JMenuItem copyIp = new JMenuItem("IP 복사");
+        copyIp.addActionListener(e -> copySelectedIp());
+        JMenuItem open = new JMenuItem("브라우저로 열기");
+        open.addActionListener(e -> openSelectedIp());
+        popup.add(copyIp); popup.add(open);
+        table.setComponentPopupMenu(popup);
+
         // 안전 종료: 스캔 중이면 취소
         addWindowListener(new WindowAdapter() {
-            @Override public void windowClosing(WindowEvent e) {
-                if (currentWorker != null && !currentWorker.isDone()) {
-                    currentWorker.cancel(true);
-                }
-            }
+            @Override public void windowClosing(WindowEvent e) { cancelScanIfRunning(); }
         });
 
         setVisible(true);
@@ -150,9 +199,93 @@ public class HttpConnector_V4 extends JFrame {
         onScanButton();
     }
 
+    private JToolBar buildToolbar() {
+        JToolBar bar = new JToolBar();
+        bar.setFloatable(false);
+        bar.setBorder(new EmptyBorder(10, 12, 6, 12));
+        bar.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 0));
+
+        JLabel title = new JLabel("IP 대역 HTTPS 접속기");
+        title.setFont(title.getFont().deriveFont(Font.BOLD, title.getFont().getSize() + 2f));
+        title.setBorder(new EmptyBorder(0, 0, 0, 8));
+
+        bar.add(title);
+        bar.add(separator());
+
+        bar.add(new JLabel("IP 대역"));
+        ipField = sizedField("192.168.0", 14);
+        bar.add(ipField);
+
+        bar.add(new JLabel("포트"));
+        portField = sizedField("", 5);
+        bar.add(portField);
+
+        scanButton = new JButton("검색");
+        scanButton.putClientProperty("JButton.buttonType", "roundRect");
+        bar.add(scanButton);
+
+        return bar;
+    }
+
+    private Component separator() {
+        JSeparator sep = new JSeparator(SwingConstants.VERTICAL);
+        sep.setPreferredSize(new Dimension(6, 28));
+        return sep;
+    }
+
+    private JTextField sizedField(String text, int columns) {
+        JTextField tf = new JTextField(text, columns);
+        tf.putClientProperty("JComponent.sizeVariant", "regular");
+        return tf;
+    }
+
+    private void installPlaceholder(JTextField field, String placeholder) {
+        field.putClientProperty("JTextField.placeholderText", placeholder); // 일부 LAF 지원
+        field.addFocusListener(new FocusAdapter() {
+            @Override public void focusGained(FocusEvent e) { field.repaint(); }
+            @Override public void focusLost(FocusEvent e) { field.repaint(); }
+        });
+        field.addPropertyChangeListener(evt -> field.repaint());
+    }
+
+    private void cancelScanIfRunning() {
+        if (currentWorker != null && !currentWorker.isDone()) currentWorker.cancel(true);
+    }
+
+    private void copySelectedIp() {
+        int view = table.getSelectedRow();
+        if (view < 0) return;
+        int modelRow = table.convertRowIndexToModel(view);
+        String ip = tableModel.ipAt(modelRow);
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(ip), null);
+        statusLabel.setText("복사됨: " + ip);
+    }
+
+    private void openSelectedIp() {
+        int view = table.getSelectedRow();
+        if (view < 0) return;
+        int modelRow = table.convertRowIndexToModel(view);
+        String ip = tableModel.ipAt(modelRow);
+        openInBrowser(ip);
+    }
+
+    private void openInBrowser(String ip) {
+        int port = parsePort(portField.getText().trim());
+        String url = "https://" + ip + ":" + port;
+        try {
+            Desktop.getDesktop().browse(new URI(url));
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "브라우저 열기 실패: " + ex.getMessage());
+        }
+    }
+
+    private void updateStatus() {
+        int total = tableModel.getRowCount();
+        statusLabel.setText("표시: " + total + "건");
+    }
+
     private void onScanButton() {
         if (currentWorker != null && !currentWorker.isDone()) {
-            // 진행 중이면 취소 처리
             currentWorker.cancel(true);
             return;
         }
@@ -175,6 +308,7 @@ public class HttpConnector_V4 extends JFrame {
         progressBar.setMaximum(targets.size());
         progressBar.setValue(0);
         scanButton.setText("중지");
+        statusLabel.setText("검색 중… 총 " + targets.size() + "개 대상");
 
         currentWorker = new ScanWorker(targets, port);
         currentWorker.execute();
@@ -184,6 +318,7 @@ public class HttpConnector_V4 extends JFrame {
     private class ScanWorker extends SwingWorker<Void, ScanResult> {
         private final List<String> targets;
         private final int port;
+        private final long startTime = System.currentTimeMillis();
 
         ScanWorker(List<String> targets, int port) {
             this.targets = targets;
@@ -206,15 +341,12 @@ public class HttpConnector_V4 extends JFrame {
                     futures.add(pool.submit(() -> {
                         if (isCancelled()) return; // 빠른 취소
                         ScanResult res = scanOne(ip, port);
-                        if (res != null && res.isCamera) {
-                            publish(res);
-                        }
+                        if (res != null && res.isCamera) publish(res);
                         int v = done.incrementAndGet();
                         setProgress((int) ((v * 100.0) / targets.size()));
                         SwingUtilities.invokeLater(() -> progressBar.setValue(v));
                     }));
                 }
-                // 모두 대기 (취소 시도 시 인터럽트)
                 for (Future<?> f : futures) {
                     if (isCancelled()) break;
                     try { f.get(); } catch (CancellationException ignore) { /* ignore */ }
@@ -222,7 +354,6 @@ public class HttpConnector_V4 extends JFrame {
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
             } catch (ExecutionException ee) {
-                // 개별 예외는 scanOne 내부에서 처리하므로 여기서는 로깅만
                 System.err.println("Execution error: " + ee.getMessage());
             } finally {
                 pool.shutdownNow();
@@ -233,21 +364,21 @@ public class HttpConnector_V4 extends JFrame {
         @Override
         protected void process(List<ScanResult> chunks) {
             for (ScanResult r : chunks) tableModel.addRow(r, ipToMacMap.get(r.ip));
+            updateStatus();
         }
 
         @Override
         protected void done() {
             progressBar.setVisible(false);
             scanButton.setText("검색");
+            long ms = System.currentTimeMillis() - startTime;
+            statusLabel.setText("완료 · " + tableModel.getRowCount() + "건 감지 · " + ms + "ms");
         }
     }
 
     // 단일 IP 스캔 → 카메라 추정 여부
     private static ScanResult scanOne(String ip, int port) {
-        // 1) 빠른 TCP 포트 열림 체크
         if (!tcpOpen(ip, port, TCP_CONNECT_TIMEOUT_MS)) return null;
-
-        // 2) HTTPS 연결 시도 → SSLHandshakeException 이면 카메라로 표기
         HttpsURLConnection conn = null;
         try {
             URL url = new URL("https://" + ip + ":" + port + "/");
@@ -256,13 +387,10 @@ public class HttpConnector_V4 extends JFrame {
             conn.setReadTimeout(HTTPS_CONNECT_TIMEOUT_MS);
             conn.setInstanceFollowRedirects(false);
             conn.connect();
-            // 정상 핸드셰이크/연결이면 "카메라"로 단정하지 않음 (false)
             return new ScanResult(ip, false);
         } catch (SSLHandshakeException ssl) {
-            // 자체서명/허약한 암호군 등으로 실패 → 임베디드 장비(카메라)일 확률 높음
             return new ScanResult(ip, true);
         } catch (Exception ignore) {
-            // 기타 예외는 불명확 → 표시하지 않음
             return null;
         } finally {
             if (conn != null) conn.disconnect();
@@ -302,16 +430,11 @@ public class HttpConnector_V4 extends JFrame {
             Row(String ip, String display, boolean isCamera) { this.ip = ip; this.display = display; this.isCamera = isCamera; }
         }
 
-        void clear() {
-            rows.clear();
-            fireTableDataChanged();
-        }
-
+        void clear() { rows.clear(); fireTableDataChanged(); }
         void addRow(ScanResult r, String mac) {
             String display = mac == null ? r.ip : r.ip + " (" + mac + ")";
             rows.add(new Row(r.ip, display, r.isCamera));
-            int idx = rows.size() - 1;
-            fireTableRowsInserted(idx, idx);
+            int idx = rows.size() - 1; fireTableRowsInserted(idx, idx);
         }
 
         @Override public int getRowCount() { return rows.size(); }
@@ -329,83 +452,86 @@ public class HttpConnector_V4 extends JFrame {
             }
             return null;
         }
-
-        public String ipAt(int viewRow) {
-            Row r = rows.get(viewRow);
-            return r.ip;
-        }
+        public String ipAt(int modelRow) { return rows.get(modelRow).ip; }
     }
 
     // ===== Renderer/Editor =====
-    static class StatusRenderer extends DefaultTableCellRenderer {
+    static class IpRenderer extends DefaultTableCellRenderer {
+        private final Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 12);
         @Override
         public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
             JLabel label = (JLabel) super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-            String v = value == null ? "" : value.toString();
-            label.setHorizontalAlignment(SwingConstants.CENTER);
-            if ("카메라".equals(v)) label.setForeground(new Color(0, 153, 0));
-            else label.setForeground(isSelected ? table.getSelectionForeground() : table.getForeground());
+            label.setFont(mono);
+            label.setBorder(new EmptyBorder(0, 8, 0, 8));
             return label;
         }
     }
 
+    static class StatusPillRenderer extends DefaultTableCellRenderer {
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+            String v = value == null ? "" : value.toString();
+            JLabel pill = new JLabel(v, SwingConstants.CENTER) {
+                @Override protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    int w = getWidth(); int h = getHeight();
+                    Color bg;
+                    if ("카메라".equals(getText())) bg = new Color(32, 158, 80);
+                    else bg = new Color(120, 120, 120);
+                    if (isSelected) bg = bg.darker();
+                    g2.setColor(bg);
+                    g2.fillRoundRect(6, 6, w - 12, h - 12, h, h);
+                    g2.dispose();
+                    super.paintComponent(g);
+                }
+            };
+            pill.setForeground(Color.WHITE);
+            pill.setOpaque(false);
+            pill.setBorder(new EmptyBorder(0, 0, 0, 0));
+            return pill;
+        }
+    }
+
     static class ButtonRenderer extends JButton implements TableCellRenderer {
-        ButtonRenderer() { setText("접속"); }
+        ButtonRenderer() { setText("접속"); setFocusPainted(false); }
         @Override public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) { return this; }
     }
 
     class ButtonEditor extends DefaultCellEditor {
         private final JButton button = new JButton("접속");
         private String ip;
-
         public ButtonEditor(JCheckBox checkBox) {
             super(checkBox);
+            button.setFocusPainted(false);
             button.addActionListener(e -> fireEditingStopped());
         }
-
         @Override
         public Component getTableCellEditorComponent(JTable table, Object value, boolean isSelected, int row, int column) {
             int modelRow = table.convertRowIndexToModel(row);
             this.ip = tableModel.ipAt(modelRow);
             return button;
         }
-
         @Override
         public Object getCellEditorValue() {
-            String portText = portField.getText().trim();
-            int port = parsePort(portText);
-            String url = "https://" + ip + ":" + port;
-            try {
-                Desktop.getDesktop().browse(new URI(url));
-            } catch (Exception ex) {
-                JOptionPane.showMessageDialog(null, "브라우저 열기 실패: " + ex.getMessage());
-            }
+            openInBrowser(ip);
             return "접속";
         }
     }
 
     // ===== Data & Utils =====
-    static class ScanResult {
-        final String ip; boolean isCamera;
-        ScanResult(String ip, boolean isCamera) { this.ip = ip; this.isCamera = isCamera; }
-    }
+    static class ScanResult { final String ip; boolean isCamera; ScanResult(String ip, boolean isCamera) { this.ip = ip; this.isCamera = isCamera; } }
 
     static class Util {
         static long ipToLong(String ipOrDisplay) {
-            // "192.168.0.10 (MAC)" → 순수 IP만 추출
             String ip = ipOrDisplay;
             int idx = ip.indexOf(' ');
             if (idx > 0) ip = ip.substring(0, idx);
             String[] parts = ip.split("\\.");
             if (parts.length != 4) return 0L;
             long v = 0;
-            try {
-                for (String p : parts) {
-                    v = (v << 8) + Integer.parseInt(p);
-                }
-            } catch (NumberFormatException e) {
-                return 0L;
-            }
+            try { for (String p : parts) { v = (v << 8) + Integer.parseInt(p); } }
+            catch (NumberFormatException e) { return 0L; }
             return v;
         }
     }
@@ -420,32 +546,12 @@ public class HttpConnector_V4 extends JFrame {
         static List<String> parseTargets(String input) {
             input = input.trim();
             Matcher m;
-
-            // 1) 정확한 IP 하나
             m = EXACT.matcher(input);
-            if (m.matches()) {
-                String ip = four(m);
-                validateOctets(ip);
-                return Collections.singletonList(ip);
-            }
-
-            // 2) 3옥텟까지: a.b.c → a.b.c.1~254
+            if (m.matches()) { String ip = four(m); validateOctets(ip); return Collections.singletonList(ip); }
             m = BASE.matcher(input);
-            if (m.matches()) {
-                String prefix = three(m);
-                validateThree(prefix);
-                return range(prefix, 1, 254);
-            }
-
-            // 3) a.b.c.*
+            if (m.matches()) { String prefix = three(m); validateThree(prefix); return range(prefix, 1, 254); }
             m = STAR.matcher(input);
-            if (m.matches()) {
-                String prefix = three(m);
-                validateThree(prefix);
-                return range(prefix, 1, 254);
-            }
-
-            // 4) a.b.c.d-e
+            if (m.matches()) { String prefix = three(m); validateThree(prefix); return range(prefix, 1, 254); }
             m = RANGE.matcher(input);
             if (m.matches()) {
                 String prefix = m.group(1) + "." + m.group(2) + "." + m.group(3);
@@ -456,43 +562,31 @@ public class HttpConnector_V4 extends JFrame {
                     throw new IllegalArgumentException("마지막 옥텟 범위가 올바르지 않습니다.");
                 return range(prefix, start, end);
             }
-
-            // 5) a.b.c.x/24 → a.b.c.1~254
             m = CIDR24.matcher(input);
-            if (m.matches()) {
-                String prefix = three(m);
-                validateThree(prefix);
-                return range(prefix, 1, 254);
-            }
-
+            if (m.matches()) { String prefix = three(m); validateThree(prefix); return range(prefix, 1, 254); }
             throw new IllegalArgumentException("지원 형식: 'a.b.c', 'a.b.c.*', 'a.b.c.d', 'a.b.c.d-e', 'a.b.c.x/24'");
         }
-
         private static String four(Matcher m) { return m.group(1) + "." + m.group(2) + "." + m.group(3) + "." + m.group(4); }
         private static String three(Matcher m) { return m.group(1) + "." + m.group(2) + "." + m.group(3); }
+        private static void validateThree(String prefix) { String[] p = prefix.split("\\."); if (p.length != 3) throw new IllegalArgumentException("입력 오류"); for (String s : p) validateOctet(s); }
+        private static void validateOctets(String ip) { String[] parts = ip.split("\\."); if (parts.length != 4) throw new IllegalArgumentException("입력 오류"); for (String s : parts) validateOctet(s); }
+        private static void validateOctet(String s) { int v = Integer.parseInt(s); if (v < 0 || v > 255) throw new IllegalArgumentException("옥텟 범위(0~255) 위반: " + v); }
+        private static List<String> range(String prefix, int start, int end) { List<String> list = new ArrayList<>(Math.max(0, end - start + 1)); for (int i = start; i <= end; i++) list.add(prefix + "." + i); return list; }
+    }
 
-        private static void validateThree(String prefix) {
-            String[] p = prefix.split("\\.");
-            if (p.length != 3) throw new IllegalArgumentException("입력 오류");
-            for (String s : p) validateOctet(s);
-        }
-        private static void validateOctets(String ip) {
-            String[] parts = ip.split("\\.");
-            if (parts.length != 4) throw new IllegalArgumentException("입력 오류");
-            for (String s : parts) validateOctet(s);
-        }
-        private static void validateOctet(String s) {
-            int v = Integer.parseInt(s);
-            if (v < 0 || v > 255) throw new IllegalArgumentException("옥텟 범위(0~255) 위반: " + v);
-        }
-        private static List<String> range(String prefix, int start, int end) {
-            List<String> list = new ArrayList<>(Math.max(0, end - start + 1));
-            for (int i = start; i <= end; i++) list.add(prefix + "." + i);
-            return list;
+    private void applyModernUI() {
+        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignore) {}
+        // 폰트 톤 조정(조심스럽게)
+        Font base = UIManager.getFont("Label.font");
+        if (base != null) {
+            Font ui = base.deriveFont(base.getSize2D());
+            UIManager.put("Label.font", ui);
+            UIManager.put("Button.font", ui);
+            UIManager.put("TextField.font", ui);
+            UIManager.put("Table.font", ui);
+            UIManager.put("TableHeader.font", ui.deriveFont(Font.BOLD));
         }
     }
 
-    public static void main(String[] args) {
-        SwingUtilities.invokeLater(HttpConnector_V4::new);
-    }
+    public static void main(String[] args) { SwingUtilities.invokeLater(HttpConnector_V4::new); }
 }
